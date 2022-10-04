@@ -18,21 +18,26 @@ package machine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/IBM/vpc-go-sdk/vpcv1"
+	igntypes "github.com/coreos/ignition/v2/config/v3_2/types"
 	machinev1 "github.com/openshift/api/machine/v1beta1"
 	machinecontroller "github.com/openshift/machine-api-operator/pkg/controller/machine"
 	"github.com/openshift/machine-api-operator/pkg/metrics"
-	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 	apicorev1 "k8s.io/api/core/v1"
 	apimachineryerrors "k8s.io/apimachinery/pkg/api/errors"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 )
 
 const (
+	ignitionStatusAttempts   = 60
+	ignitionStatusSleep      = 10
 	requeueAfterSeconds      = 20
 	requeueAfterFatalSeconds = 180
 	userDataSecretKey        = "userData"
@@ -61,6 +66,11 @@ func (r *Reconciler) create() error {
 	if err != nil {
 		return fmt.Errorf("failed to get user data: %w", err)
 	}
+
+	// NOTE(cjschaef): Attempt to parse UserData for Ignition Configuration and determine if the Configuration requires contacting an Ignition Server
+	// If an Ignition Server is required, we should attempt to confirm it is reachable first
+	// This is intended as a temporary solution and helps mitigate https://issues.redhat.com/browse/OCPBUGS-1327
+	r.checkIgnitionStatus(userData)
 
 	// Create an instance
 	_, err = r.ibmClient.InstanceCreate(r.machine.Name, r.providerSpec, userData)
@@ -162,6 +172,59 @@ func (r *Reconciler) getUserData() (string, error) {
 		return "", machinecontroller.InvalidMachineConfiguration("secret %v/%v does not have %q field set. Thus, no user data applied when creating an instance", r.machine.GetNamespace(), r.providerSpec.UserDataSecret.Name, userDataSecretKey)
 	}
 	return string(data), nil
+}
+
+// checkIgnitionStatus attempts to determine if Ignition is configured and check status of the server, if provided
+func (r *Reconciler) checkIgnitionStatus(userData string) {
+	var ignitionConfig igntypes.Config
+	if err := json.Unmarshal([]byte(userData), &ignitionConfig); err != nil {
+		klog.Warningf("%s: failure attempting to unmarshal UserData: %w", r.machine.Name, err)
+		return
+	}
+	if len(ignitionConfig.Ignition.Config.Merge) == 1 && ignitionConfig.Ignition.Config.Merge[0].Source != nil {
+		//ignitionSource := *ignitionConfig.Ignition.Config.Merge[0].Source
+		// client := &http.Client{}
+		//request, err := http.NewRequest("GET", ignitionSource, nil)
+		//if err != nil {
+		//	klog.Warningf("%s: failure attempting to generate HTTP request for ignition source", r.machine.Name)
+		//}
+		attempt := 0
+		for attempt < ignitionStatusAttempts {
+			attempt += 1
+			var bootstrapCompleteCM apicorev1.ConfigMap
+			if err := r.client.Get(context.Background(), client.ObjectKey{Namespace: "kube-system", Name: "boostrap"}, &bootstrapCompleteCM); err != nil {
+				klog.Warningf("%s: failure collecting kube-system/configmap/boostrap", r.machine.Name)
+			}
+
+			if len(bootstrapCompleteCM.Data) > 0 {
+				if status, ok := bootstrapCompleteCM.Data["status"]; ok {
+					if status == "complete" {
+						klog.Warningf("%s: bootstrap status complete: %s", r.machine.Name, status)
+						return
+					}
+					klog.Warningf("%s: bootstrap status not complete: %s", r.machine.Name, status)
+				} else {
+					klog.Warningf("%s: bootstrap status unknown", r.machine.Name)
+				}
+			} else {
+				klog.Warningf("%s: bootstrap CM contains no data", r.machine.Name)
+			}
+
+			// response, err := client.Do(request)
+			//response, err := http.DefaultTransport.RoundTrip(request)
+			//if err != nil {
+			//	klog.Warningf("%s: failure sending request to ignition source: attempt #%d", r.machine.Name, attempt)
+			//} else {
+			//	response.Body.Close()
+			//	klog.Infof("%s: ignition source responded: %s", r.machine.Name, ignitionSource)
+			//	return
+			//}
+
+			time.Sleep(ignitionStatusSleep * time.Second)
+		}
+	}
+
+	klog.Warningf("%s: ignition configuration does not contain ignition source to check status", r.machine.Name)
 }
 
 // reconcileMachineWithCloudState reconcile Machine status and spec with the lastest cloud state
