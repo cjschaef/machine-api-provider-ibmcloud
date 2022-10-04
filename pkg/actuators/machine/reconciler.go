@@ -18,21 +18,27 @@ package machine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/IBM/vpc-go-sdk/vpcv1"
+	igntypes "github.com/coreos/ignition/v2/config/v3_2/types"
+	apiconfigv1 "github.com/openshift/api/config/v1"
 	machinev1 "github.com/openshift/api/machine/v1beta1"
 	machinecontroller "github.com/openshift/machine-api-operator/pkg/controller/machine"
 	"github.com/openshift/machine-api-operator/pkg/metrics"
-	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 	apicorev1 "k8s.io/api/core/v1"
 	apimachineryerrors "k8s.io/apimachinery/pkg/api/errors"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 )
 
 const (
+	ignitionStatusAttempts   = 60
+	ignitionStatusSleep      = 10
 	requeueAfterSeconds      = 20
 	requeueAfterFatalSeconds = 180
 	userDataSecretKey        = "userData"
@@ -61,6 +67,11 @@ func (r *Reconciler) create() error {
 	if err != nil {
 		return fmt.Errorf("failed to get user data: %w", err)
 	}
+
+	// NOTE(cjschaef): Attempt to parse UserData for Ignition Configuration and determine if the Configuration requires contacting an Ignition Server
+	// If an Ignition Server is required, we should attempt to confirm it is reachable first
+	// This is intended as a temporary solution and helps mitigate https://issues.redhat.com/browse/OCPBUGS-1327
+	r.checkIgnitionStatus(userData)
 
 	// Create an instance
 	_, err = r.ibmClient.InstanceCreate(r.machine.Name, r.providerSpec, userData)
@@ -162,6 +173,41 @@ func (r *Reconciler) getUserData() (string, error) {
 		return "", machinecontroller.InvalidMachineConfiguration("secret %v/%v does not have %q field set. Thus, no user data applied when creating an instance", r.machine.GetNamespace(), r.providerSpec.UserDataSecret.Name, userDataSecretKey)
 	}
 	return string(data), nil
+}
+
+// checkIgnitionStatus attempts to determine if Ignition is configured and check status of the server, if provided
+func (r *Reconciler) checkIgnitionStatus(userData string) {
+	var ignitionConfig igntypes.Config
+	if err := json.Unmarshal([]byte(userData), &ignitionConfig); err != nil {
+		klog.Warningf("%s: failure attempting to unmarshal UserData: %w", r.machine.Name, err)
+		return
+	}
+	if len(ignitionConfig.Ignition.Config.Merge) == 1 && ignitionConfig.Ignition.Config.Merge[0].Source != nil {
+		attempt := 0
+		for attempt < ignitionStatusAttempts {
+			attempt += 1
+			var mcsOperator apiconfigv1.ClusterOperator
+			if err := r.client.Get(context.Background(), client.ObjectKey{Name: "machine-config"}, &mcsOperator); err != nil {
+				klog.Warningf("%s: failure collecting clusteroperator/machine-config", r.machine.Name)
+			}
+
+			if len(mcsOperator.Status.Conditions) > 0 {
+				for _, condition := range mcsOperator.Status.Conditions {
+					if condition.Type == apiconfigv1.OperatorAvailable && condition.Status == apiconfigv1.ConditionTrue {
+						klog.Infof("%s: machine-config operator is available", r.machine.Name)
+						return
+					}
+				}
+				klog.Warningf("%s: machine-config operator is not available", r.machine.Name)
+			} else {
+				klog.Warningf("%s: machine-config operator has no conditions", r.machine.Name)
+			}
+
+			time.Sleep(ignitionStatusSleep * time.Second)
+		}
+	}
+
+	klog.Warningf("%s: ignition configuration does not contain ignition source to check status", r.machine.Name)
 }
 
 // reconcileMachineWithCloudState reconcile Machine status and spec with the lastest cloud state
