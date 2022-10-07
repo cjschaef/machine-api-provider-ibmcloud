@@ -18,24 +18,39 @@ package machine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/IBM/vpc-go-sdk/vpcv1"
+	igntypes "github.com/coreos/ignition/v2/config/v3_2/types"
 	machinev1 "github.com/openshift/api/machine/v1beta1"
 	machinecontroller "github.com/openshift/machine-api-operator/pkg/controller/machine"
 	"github.com/openshift/machine-api-operator/pkg/metrics"
-	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 	apicorev1 "k8s.io/api/core/v1"
 	apimachineryerrors "k8s.io/apimachinery/pkg/api/errors"
 	klog "k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 )
 
 const (
 	requeueAfterSeconds      = 20
 	requeueAfterFatalSeconds = 180
 	userDataSecretKey        = "userData"
+
+	// The following values are used for machine replacement, when it appears the machine is stuck and unresponsive as part of
+	// https://issues.redhat.com/browse/OCPBUGS-1327
+	// Time in minutes a Provisioned machine has before a delete is called to force re-create
+	instanceReplaceDeadline = 15
+	// Phase and Status of machine which could be stuck and require replacement
+	phaseProvisioned = "Provisioned"
+	statusRunning    = "running"
+	statusDeleting   = "deleting"
+	// Used to check Ignition Config sources for Https locations only (for MCS)
+	httpsPrefix = "https://"
 )
 
 // Reconciler are list of services required by machine actuator, easy to create a fake
@@ -175,7 +190,41 @@ func (r *Reconciler) reconcileMachineWithCloudState(conditionFailed *ibmcloudpro
 	// conditionFailed is nil, get the cloud instance and reconcile the fields
 	newInstance, err := r.ibmClient.InstanceGetByName(r.machine.Name, r.providerSpec)
 	if err != nil {
+		// Check whether the machine was recently removed to replace a stuck machine in order to resolve
+		// https://issues.redhat.com/browse/OCPBUGS-1327
+		// We need to wait until the IBM Cloud VSI is actually gone before re-creating it with the same name (to prevent cascading issues using a different name)
+		// Check if the machine just completed deletion and should now have a replacement creation in progress
+		if conditionTypeCheck(r.providerStatus.Conditions, ibmcloudproviderv1.MachineReplaced) != nil {
+			klog.Infof("%s: waiting for replacement machine to start creating", r.machine.Name)
+			return nil
+		}
 		return fmt.Errorf("get instance failed with an error: %q", err)
+	}
+
+	if newInstance.Status != nil && *newInstance.Status == statusDeleting && conditionTypeCheck(r.providerStatus.Conditions, ibmcloudproviderv1.MachineReplaced) != nil {
+		klog.Infof("%s: waiting for stuck machine to be deleted prior to replacement", r.machine.Name)
+		return nil
+	}
+
+	// Check whether the machine remains in Provisioned state but not Running for more than 'instanceReplaceDeadline' minutes
+	// Attempt to mitigate https://issues.redhat.com/browse/OCPBUGS-1327
+	// Bypass check if machine statuses do not match this expected case, and only check for stuck machine if the machine has not yet been replaced (attempt to replace only once)
+	if newInstance.Status != nil && *newInstance.Status == statusRunning && r.machine.Status.Phase != nil && *r.machine.Status.Phase == phaseProvisioned && conditionTypeCheck(r.providerStatus.Conditions, ibmcloudproviderv1.MachineReplaced) == nil {
+		if replacementRequired, err := r.checkInstanceRequiresReplacement(newInstance); err == nil && replacementRequired {
+			klog.Warningf("%s: attempting to replace stuck machine", r.machine.Name)
+			// Update status that machine will be replaced
+			r.providerStatus.Conditions = reconcileProviderConditions(r.providerStatus.Conditions, ibmcloudproviderv1.IBMCloudMachineProviderCondition{
+				Type:    ibmcloudproviderv1.MachineReplaced,
+				Reason:  ibmcloudproviderv1.MachineReplacementRequested,
+				Message: machineReplacementRequestedMessageCondition,
+				Status:  apicorev1.ConditionTrue,
+			})
+			// We must remove the machine's addresses and provider ID since we are replacing it
+			r.machine.Spec.ProviderID = nil
+			r.machine.Status.Addresses = make([]apicorev1.NodeAddress, 0)
+			// Attempt to delete the stuck machine
+			return r.delete()
+		}
 	}
 
 	// Update Machine Status Addresses
@@ -223,11 +272,49 @@ func (r *Reconciler) reconcileMachineWithCloudState(conditionFailed *ibmcloudpro
 	r.setMachineCloudProviderSpecifics(newInstance)
 
 	// Requeue if status is not Running
-	if *newInstance.Status != "running" {
+	if *newInstance.Status != statusRunning {
 		klog.Infof("%s: machine status is %q, requeuing...", r.machine.Name, *newInstance.Status)
 		return &machinecontroller.RequeueAfterError{RequeueAfter: requeueAfterSeconds * time.Second}
 	}
 	return nil
+}
+
+// checkInstanceRequiresReplacement determines whether an instance is stuck in initial bootup and requires deletion to potentially fix with a re-create
+func (r *Reconciler) checkInstanceRequiresReplacement(instance *vpcv1.Instance) (bool, error) {
+	userData, err := r.getUserData()
+	if err != nil {
+		klog.Warningf("%s: failure collecting user data: %w", r.machine.Name, err)
+		return false, err
+	}
+	var ignitionConfig igntypes.Config
+	if err := json.Unmarshal([]byte(userData), &ignitionConfig); err != nil {
+		klog.Warningf("%s: failure attempting to unmarshal UserData: %w", r.machine.Name, err)
+		return false, err
+	}
+
+	// If the Ignition Config requires fetching additional configuration from an Https source, determine whether it has become stuck attempting to fetch from that source
+	if len(ignitionConfig.Ignition.Config.Merge) == 1 && ignitionConfig.Ignition.Config.Merge[0].Source != nil && strings.HasPrefix(*ignitionConfig.Ignition.Config.Merge[0].Source, httpsPrefix) {
+		createdDate, err := time.Parse(time.RFC3339, instance.CreatedAt.String())
+		if err != nil {
+			// If we fail parsing creation time, skip check for replacement
+			klog.Warningf("%s: failure parsing machine creation date: %q", r.machine.Name, *instance.CreatedAt)
+			return false, err
+		}
+
+		// Calculate the deadline and current time
+		deadlineDate := createdDate.Add(time.Minute * instanceReplaceDeadline)
+		now := time.Now().UTC()
+
+		// If current time is not before the deadline from creation time, it should be replaced
+		if !now.Before(deadlineDate) {
+			klog.Infof("%s: machine is older than deadline, requesting replacement")
+			return true, nil
+		}
+		klog.Infof("%s: replacement not required for '%s' machine", r.machine.Name, *instance.Status)
+		return false, nil
+	}
+	klog.Infof("%s: machine ignition config does not require source data", r.machine.Name)
+	return false, nil
 }
 
 // setMachineCloudProviderSpecifics updates Machine resource labels and Annotations

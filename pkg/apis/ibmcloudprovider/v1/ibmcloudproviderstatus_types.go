@@ -50,6 +50,8 @@ const (
 	// MachineCreated indicates whether the machine has been created or not. If not,
 	// it should include a reason and message for the failure.
 	MachineCreated IBMCloudMachineProviderConditionType = "MachineCreated"
+	// MachineReplaced indicates whether the machine has been replaced or not.
+	MachineReplaced IBMCloudMachineProviderConditionType = "MachineReplaced"
 )
 
 // IBMCloudMachineProviderConditionReason is reason for the condition's last transition.
@@ -60,6 +62,8 @@ const (
 	MachineCreationSucceeded IBMCloudMachineProviderConditionReason = "MachineCreationSucceeded"
 	// MachineCreationFailed indicates machine creation failure.
 	MachineCreationFailed IBMCloudMachineProviderConditionReason = "MachineCreationFailed"
+	// MachineReplacementRequested indicates machine replacement was requested.
+	MachineReplacementRequested IBMCloudMachineProviderConditionReason = "MachineReplacementRequested"
 )
 
 // IBMCloudMachineProviderCondition is a condition in a IBMCloudMachineProviderStatus.
