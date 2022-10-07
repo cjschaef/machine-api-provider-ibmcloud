@@ -27,6 +27,9 @@ const (
 	machineCreationSucceedReasonCondition  = "MachineCreationSucceeded"
 	machineCreationSucceedMessageCondition = "Machine successfully created"
 	machineCreationFailedReasonCondition   = "MachineCreationFailed"
+	// Message added when we attempt to replace a stuck machine as part of
+	// https://issues.redhat.com/browse/OCPBUGS-1327
+	machineReplacementRequestedMessageCondition = "Machine replacement requested"
 )
 
 // reconcileProviderConditions updates condition for the machine and returns new Condition []
