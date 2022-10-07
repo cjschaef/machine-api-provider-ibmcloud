@@ -229,6 +229,20 @@ func (mr *MockClientMockRecorder) InstanceGetProfile(profileName interface{}) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceGetProfile", reflect.TypeOf((*MockClient)(nil).InstanceGetProfile), profileName)
 }
 
+// InstanceTriggerReboot mocks base method.
+func (m *MockClient) InstanceTriggerReboot(instanceID string) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InstanceTriggerReboot", instanceID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InstanceTriggerReboot indicates an expected call of InstanceTriggerReboot.
+func (mr *MockClientMockRecorder) InstanceTriggerReboot(instanceID interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InstanceTriggerReboot", reflect.TypeOf((*MockClient)(nil).InstanceTriggerReboot), instanceID)
+}
+
 // VerifyInstanceProfile mocks base method.
 func (m *MockClient) VerifyInstanceProfile(profile string) (string, error) {
 	m.ctrl.T.Helper()

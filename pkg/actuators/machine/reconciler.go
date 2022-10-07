@@ -36,6 +36,8 @@ const (
 	requeueAfterSeconds      = 20
 	requeueAfterFatalSeconds = 180
 	userDataSecretKey        = "userData"
+	// Time in minutes a Provisioned machine has before a reboot is forced
+	instanceRebootDeadline = 10
 )
 
 // Reconciler are list of services required by machine actuator, easy to create a fake
@@ -178,6 +180,13 @@ func (r *Reconciler) reconcileMachineWithCloudState(conditionFailed *ibmcloudpro
 		return fmt.Errorf("get instance failed with an error: %q", err)
 	}
 
+	// Check whether the machine remains in Provisioned state but not Running for more than 'instanceRebootDeadline' minutes
+	// Attempt to mitigate https://issues.redhat.com/browse/OCPBUGS-1327
+	if rebootRequested, err := r.checkInstanceRequiresReboot(newInstance); err == nil && rebootRequested {
+		klog.Infof("%s: machine status is stuck in %q, requeuing...", r.machine.Name, *newInstance.Status)
+		return &machinecontroller.RequeueAfterError{RequeueAfter: requeueAfterSeconds * time.Second}
+	}
+
 	// Update Machine Status Addresses
 	ipAddr := *newInstance.PrimaryNetworkInterface.PrimaryIpv4Address
 	if ipAddr != "" {
@@ -228,6 +237,32 @@ func (r *Reconciler) reconcileMachineWithCloudState(conditionFailed *ibmcloudpro
 		return &machinecontroller.RequeueAfterError{RequeueAfter: requeueAfterSeconds * time.Second}
 	}
 	return nil
+}
+
+// checkInstanceRequiresReboot determines whether an instance is stuck in initial bootup and requires a reboot to potentially fix
+func (r *Reconciler) checkInstanceRequiresReboot(instance *vpcv1.Instance) (bool, error) {
+	createdDate, err := time.Parse(time.RFC3339, instance.CreatedAt.String())
+	if err != nil {
+		// If we fail parsing creation time, skip check for reboot
+		klog.Warningf("%s: failure parsing machine creation date: %q", r.machine.Name, *instance.CreatedAt)
+		return false, err
+	}
+
+	// Calculate the deadline and current time
+	deadlineDate := createdDate.Add(time.Minute * instanceRebootDeadline)
+	now := time.Now().UTC()
+
+	// If current time is not before the deadline from creation time and Status is still Provisioned, trigger reboot
+	if !now.Before(deadlineDate) && *instance.Status == "running" && r.machine.Status.Phase != nil && *r.machine.Status.Phase == "Provisioned" {
+		if err := r.ibmClient.InstanceTriggerReboot(*instance.ID); err != nil {
+			klog.Warningf("%s: failure triggering reboot for potentially stuck machine", r.machine.Name)
+			return false, err
+		}
+		klog.Infof("%s: reboot requested for potentially stuck machine", r.machine.Name)
+		return true, nil
+	}
+	klog.Infof("%s: forced reboot not required for '%s' machine", r.machine.Name, *instance.Status)
+	return false, nil
 }
 
 // setMachineCloudProviderSpecifics updates Machine resource labels and Annotations

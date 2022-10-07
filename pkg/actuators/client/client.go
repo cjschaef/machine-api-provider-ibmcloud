@@ -40,6 +40,7 @@ type Client interface {
 	InstanceDeleteByName(name string, machineProviderConfig *ibmcloudproviderv1.IBMCloudMachineProviderSpec) error
 	InstanceCreate(machineName string, machineProviderConfig *ibmcloudproviderv1.IBMCloudMachineProviderSpec, userData string) (*vpcv1.Instance, error)
 	InstanceGetProfile(profileName string) (bool, error)
+	InstanceTriggerReboot(instanceID string) error
 
 	// Helper functions
 	GetAccountID() (string, error)
@@ -347,6 +348,20 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	}
 
 	return instance, nil
+}
+
+// InstanceTriggerReboot will attempt to force an instance to reboot
+func (c *ibmCloudClient) InstanceTriggerReboot(instanceID string) error {
+	// Initialize InstanceAction Options
+	actionOptions := c.vpcService.NewCreateInstanceActionOptions(instanceID, vpcv1.CreateInstanceActionOptionsTypeRebootConst)
+	actionOptions.SetForce(true)
+
+	// Attempt to queue up a reboot for the instance
+	_, _, err := c.vpcService.CreateInstanceAction(actionOptions)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 // GetVPCIDByName Retrives VPC ID
