@@ -135,6 +135,32 @@ const (
 	RollingUpdateMachineDeploymentStrategyType MachineDeploymentStrategyType = "RollingUpdate"
 )
 
+const (
+	// PhaseFailed indicates a state that will likely need to be fixed before progress can be made
+	// although this is not a transient error
+	// https://github.com/openshift/enhancements/blob/master/enhancements/machine-instance-lifecycle.md
+	// e.g. Instance does NOT exist but Machine has providerID/address
+	// e.g. Cloud service returns a 4xx response
+	PhaseFailed string = "Failed"
+
+	// PhaseProvisioning indicates the instance does NOT exist
+	// Machine has NOT been given providerID/address
+	PhaseProvisioning string = "Provisioning"
+
+	// PhaseProvisioned indicates the instance exists
+	// Machine has been given providerID/address
+	// Machine has NOT been given nodeRef
+	PhaseProvisioned string = "Provisioned"
+
+	// PhaseRunning indicates the instance exists
+	// Machine has been given providerID/address
+	// Machine has been given a nodeRef
+	PhaseRunning string = "Running"
+
+	// PhaseDeleting indicates the machine has a deletion timestamp
+	PhaseDeleting string = "Deleting"
+)
+
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 

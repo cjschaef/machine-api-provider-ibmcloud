@@ -15,11 +15,11 @@ require (
 	github.com/onsi/gomega v1.20.1
 	github.com/openshift/api v0.0.0-20220921125526-1866ef90edbf
 	github.com/openshift/machine-api-operator v0.2.1-0.20220930152820-30825f121cc5
-	github.com/pkg/errors v0.9.1
 	k8s.io/api v0.25.2
 	k8s.io/apimachinery v0.25.2
 	k8s.io/client-go v0.25.2
 	k8s.io/klog/v2 v2.80.1
+	k8s.io/utils v0.0.0-20220823124924-e9cbc92d1a73
 	sigs.k8s.io/controller-runtime v0.13.0
 	sigs.k8s.io/controller-tools v0.10.0
 	sigs.k8s.io/yaml v1.3.0
@@ -90,6 +90,7 @@ require (
 	github.com/openshift/client-go v0.0.0-20220915152853-9dfefb19db2e // indirect
 	github.com/openshift/library-go v0.0.0-20220920133651-093893cf326b // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.12.2 // indirect
 	github.com/prometheus/client_model v0.2.0 // indirect
 	github.com/prometheus/common v0.32.1 // indirect
@@ -122,9 +123,11 @@ require (
 	k8s.io/component-base v0.25.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20220803162953-67bda5d908f1 // indirect
 	k8s.io/kubectl v0.25.1 // indirect
-	k8s.io/utils v0.0.0-20220823124924-e9cbc92d1a73 // indirect
 	sigs.k8s.io/json v0.0.0-20220713155537-f223a00ba0e2 // indirect
 	sigs.k8s.io/kustomize/api v0.12.1 // indirect
 	sigs.k8s.io/kustomize/kyaml v0.13.9 // indirect
 	sigs.k8s.io/structured-merge-diff/v4 v4.2.3 // indirect
 )
+
+// TODO(cjschaef): Remove before merging
+replace github.com/openshift/api => github.com/cjschaef/api v0.0.0-20221117200200-a44779da707f
