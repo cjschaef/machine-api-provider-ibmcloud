@@ -26,6 +26,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/machine-api-operator/pkg/controller/machine"
 	klog "k8s.io/klog/v2"
+	"k8s.io/utils/pointer"
 
 	ibmcloudclienterrors "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/client/errors"
 	ibmcloudutil "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/util"
@@ -383,6 +384,19 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 			ID: &vpcID,
 		},
 		UserData: &userData,
+	}
+
+	if machineProviderConfig.BootVolume != nil && machineProviderConfig.BootVolume.EncryptionKey != "" {
+		instancePrototypeObj.BootVolumeAttachment = &vpcv1.VolumeAttachmentPrototypeInstanceByImageContext{
+			Volume: &vpcv1.VolumePrototypeInstanceByImageContext{
+				EncryptionKey: &vpcv1.EncryptionKeyIdentity{
+					CRN: &machineProviderConfig.BootVolume.EncryptionKey,
+				},
+				Profile: &vpcv1.VolumeProfileIdentity{
+					Name: pointer.String(ibmcloudutil.BootVolumeDefaultProfile),
+				},
+			},
+		}
 	}
 
 	// Get Dedicated Host ID if needed

@@ -36,6 +36,9 @@ type IBMCloudMachineProviderSpec struct {
 	// VPC name where the instance will be created
 	VPC string `json:"vpc"`
 
+	// BootVolumeKey is the IBM Cloud Key Protect key Id to use to encrypt the machine's boot volume
+	BootVolume *IBMCloudMachineBootVolume `json:"bootVolume,omitempty"`
+
 	// Actuator will apply these tags to an virtual server instance if not present in additon
 	// to default tags applied by the actuator
 	Tags []TagSpecs `json:"tags,omitempty"`
@@ -84,6 +87,16 @@ type IBMCloudMachineProviderSpec struct {
 
 	// CredentialsSecret is a reference to the secret with IBM Cloud credentials.
 	CredentialsSecret *corev1.LocalObjectReference `json:"credentialsSecret"`
+}
+
+// IBMCloudMachineBootVolume contains details for the machine's boot volume
+type IBMCloudMachineBootVolume struct {
+	// Profile is the volume profile to use for the boot volume
+	// https://cloud.ibm.com/docs/vpc?topic=vpc-block-storage-profiles&interface=ui
+	Profile string `json:"profile,omitempty"`
+
+	// EncryptionKey is the IBM Cloud Key Protect key Id to use when encrypting the boot volume
+	EncryptionKey string `json:"encryptionKey,omitempty"`
 }
 
 // NetworkInterface struct
