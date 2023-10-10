@@ -31,6 +31,9 @@ import (
 
 const (
 	credentialsSecretKey = "ibmcloud_api_key"
+
+	// BootVolumeDefaultProfile is the default profile to use when creating boot volumes.
+	BootVolumeDefaultProfile = "general-purpose"
 )
 
 // GetInfrastructureConfig returns the cluster's Infrastructure config
