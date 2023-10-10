@@ -333,6 +333,27 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 		UserData: &userData,
 	}
 
+	if machineProviderConfig.BootVolume != nil {
+		if machineProviderConfig.BootVolume.EncryptionKey != "" {
+			bootVolumeProfile := "general-purpose"
+			if machineProviderConfig.BootVolume.Profile != "" {
+				bootVolumeProfile = machineProviderConfig.BootVolume.Profile
+			}
+			instancePrototypeObj.BootVolumeAttachment = &vpcv1.VolumeAttachmentPrototypeInstanceByImageContext{
+				Volume: &vpcv1.VolumePrototypeInstanceByImageContext{
+					EncryptionKey: machineProviderConfig.BootVolume.EncryptionKey,
+					Profile:       bootVolumeProfile,
+				},
+			}
+		} else if machineProviderConfig.BootVolume.Profile != "" {
+			instancePrototypeObj.BootVolumeAttachment = &vpcv1.VolumeAttachmentPrototypeInstanceByImageContext{
+				Volume: &vpcv1.VolumePrototypeInstanceByImageContext{
+					Profile: machineProviderConfig.BootVolume.Profile,
+				},
+			}
+		}
+	}
+
 	// Get Dedicated Host ID if needed
 	if machineProviderConfig.DedicatedHost != "" {
 		dedicatedHostID, err := c.GetDedicatedHostByName(machineProviderConfig.DedicatedHost, resourceGroupID, machineProviderConfig.Zone)
