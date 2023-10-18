@@ -18,15 +18,21 @@ package client
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/platform-services-go-sdk/resourcemanagerv2"
 	"github.com/IBM/vpc-go-sdk/vpcv1"
 	"github.com/golang-jwt/jwt"
+	klog "k8s.io/klog/v2"
 	"github.com/openshift/machine-api-operator/pkg/controller/machine"
+	"github.com/pkg/errors"
 
 	ibmcloudclienterrors "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/client/errors"
+	ibmcloudutil "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/util"
 	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
+
+	coreClient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Client is a wrapper object for IBM SDK clients
@@ -40,6 +46,7 @@ type Client interface {
 	InstanceGetProfile(profileName string) (bool, error)
 
 	// Helper functions
+	GetServiceURL() string
 	GetAccountID() (string, error)
 	GetCustomImageByName(imageName string, resourceGroupID string) (string, error)
 	VerifyInstanceProfile(profile string) (string, error)
@@ -58,14 +65,40 @@ type ibmCloudClient struct {
 }
 
 // IbmcloudClientBuilderFuncType is function type for building ibm cloud client
-type IbmcloudClientBuilderFuncType func(credentialVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (Client, error)
+type IbmcloudClientBuilderFuncType func(client coreClient.Client, credentialVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (Client, error)
 
 // NewClient initilizes a new validated client
-func NewClient(credentialVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (Client, error) {
+func NewClient(client coreClient.Client, credentialVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (Client, error) {
+	// Get the Infrastructure config to vet for any IBM Cloud Service endpoint overrides
+	infraConfig, err := ibmcloudutil.GetInfrastructureConfig(client)
+	if err != nil {
+		return nil, err
+	}
+
+	var iamEndpointOverride, rmEndpointOverride, vpcEndpointOverride string
+	// If there are any Service endpoint overrides, attempt to load those required for this component
+	if infraConfig.Status.PlatformStatus != nil && infraConfig.Status.PlatformStatus.IBMCloud != nil && infraConfig.Status.PlatformStatus.IBMCloud.ServiceEndpoints != nil {
+		for _, endpoint := range infraConfig.Status.PlatformStatus.IBMCloud.ServiceEndpoints {
+			switch strings.ToLower(endpoint.Name) {
+			case ibmcloudutil.IBMCloudServiceIAM:
+				iamEndpointOverride = endpoint.URL
+			case ibmcloudutil.IBMCloudServiceResourceManager:
+				rmEndpointOverride = endpoint.URL
+			case ibmcloudutil.IBMCloudServiceVPC:
+				vpcEndpointOverride = endpoint.URL
+			}
+		}
+	}
 
 	// Authenticator
 	authenticator := &core.IamAuthenticator{
 		ApiKey: credentialVal,
+	}
+
+	// If an endpoint override for IAM was in Infrastructure, set it now
+	if iamEndpointOverride != "" {
+		authenticator.URL = iamEndpointOverride
+		klog.Infof("override IAM endpoint: %s", iamEndpointOverride)
 	}
 
 	// Retrieve IAM Token
@@ -98,32 +131,51 @@ func NewClient(credentialVal string, providerSpec ibmcloudproviderv1.IBMCloudMac
 	}
 
 	// IC Virtual Private Cloud (VPC) API
-	vpcService, err := vpcv1.NewVpcV1(&vpcv1.VpcV1Options{
+	vpcOptions := &vpcv1.VpcV1Options{
 		Authenticator: authenticator,
-	})
+	}
+
+	// If an endpoint override for VPC was in Infrastructure, set it now
+	if vpcEndpointOverride != "" {
+		vpcOptions.URL = vpcEndpointOverride
+		klog.Infof("override VPC endpoint: %s", vpcEndpointOverride)
+	}
+
+	vpcService, err := vpcv1.NewVpcV1(vpcOptions)
 	if err != nil {
 		return nil, err
 	}
 
 	// IC Resource Manager API
-	resourceManagerService, err := resourcemanagerv2.NewResourceManagerV2(&resourcemanagerv2.ResourceManagerV2Options{
+	rmOptions := &resourcemanagerv2.ResourceManagerV2Options{
 		Authenticator: authenticator,
-	})
+	}
+
+	// If an endpoint override for ResourceManager was in Infrastructure, set it now
+	if rmEndpointOverride != "" {
+		rmOptions.URL = rmEndpointOverride
+		klog.Infof("override ResourceManager endpoint: %s", rmEndpointOverride)
+	}
+
+	resourceManagerService, err := resourcemanagerv2.NewResourceManagerV2(rmOptions)
 	if err != nil {
 		return nil, err
 	}
 
-	// Get Region and Set Service URL
-	regionName := providerSpec.Region
-	region, _, err := vpcService.GetRegion(vpcService.NewGetRegionOptions(regionName))
-	if err != nil {
-		return nil, err
-	}
+	// Setup VPC endpoint if an override wasn't provided
+	if vpcEndpointOverride == "" {
+		// Get Region and Set Service URL
+		regionName := providerSpec.Region
+		region, _, err := vpcService.GetRegion(vpcService.NewGetRegionOptions(regionName))
+		if err != nil {
+			return nil, err
+		}
 
-	// Set the Service URL
-	err = vpcService.SetServiceURL(fmt.Sprintf("%s/v1", *region.Endpoint))
-	if err != nil {
-		return nil, err
+		// Set the Service URL
+		err = vpcService.SetServiceURL(fmt.Sprintf("%s/v1", *region.Endpoint))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &ibmCloudClient{
@@ -150,6 +202,11 @@ func (c *ibmCloudClient) InstanceExistsByName(name string, machineProviderConfig
 
 	// Could not retrieve Instances list
 	return false, err
+}
+
+// GetServiceURL gets the service URL.
+func (c *ibmCloudClient) GetServiceURL() string {
+	return c.vpcService.GetServiceURL()
 }
 
 // InstanceDeleteByName deletes the requested instance
@@ -256,6 +313,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	// Get VPC ID from VPC name
 
 	// Get Resource Group ID
+	klog.Infof("%s: collecting resource group ID", machineName)
 	resourceGroupName := machineProviderConfig.ResourceGroup
 	resourceGroupID, err := c.GetResourceGroupIDByName(resourceGroupName)
 	if err != nil {
@@ -266,6 +324,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	// Otherwise, default to Resource Group ID
 	var networkResourceGroupID string
 	if machineProviderConfig.NetworkResourceGroup != "" {
+		klog.Infof("%s: collecting network resource group ID", machineName)
 		networkResourceGroupID, err = c.GetResourceGroupIDByName(machineProviderConfig.NetworkResourceGroup)
 		if err != nil {
 			return nil, err
@@ -275,18 +334,21 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	}
 
 	// Get Custom Image ID
+	klog.Infof("%s: collecting image", machineName)
 	imageID, err := c.GetCustomImageByName(machineProviderConfig.Image, resourceGroupID)
 	if err != nil {
 		return nil, err
 	}
 
 	// Verify Instance Profile
+	klog.Infof("%s: collecting profile", machineName)
 	instanceProfile, err := c.VerifyInstanceProfile(machineProviderConfig.Profile)
 	if err != nil {
 		return nil, err
 	}
 
 	// Get VPC ID
+	klog.Infof("%s: collecting vpc ID", machineName)
 	vpcName := machineProviderConfig.VPC
 	vpcID, err := c.GetVPCIDByName(vpcName, networkResourceGroupID)
 	if err != nil {
@@ -294,6 +356,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	}
 
 	// Get Subnet ID
+	klog.Infof("%s: collecting subnet ID", machineName)
 	subnetName := machineProviderConfig.PrimaryNetworkInterface.Subnet
 	subnetID, err := c.GetSubnetIDbyName(subnetName, networkResourceGroupID)
 	if err != nil {
@@ -301,6 +364,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	}
 
 	// Get Security Groups
+	klog.Infof("%s: collecting security groups", machineName)
 	securityGroups, err := c.GetSecurityGroupsByName(machineProviderConfig.PrimaryNetworkInterface.SecurityGroups, resourceGroupID, vpcID)
 	if err != nil {
 		return nil, err
@@ -351,6 +415,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	options.SetInstancePrototype(instancePrototypeObj)
 
 	// Create a new Instance from an instance prototype object
+	klog.Infof("%s: creating instance now")
 	instance, _, err := c.vpcService.CreateInstance(options)
 	if err != nil {
 		return nil, err
@@ -443,12 +508,15 @@ func (c *ibmCloudClient) GetResourceGroupIDByName(resourceGroupName string) (str
 	resourceGroupOptions := c.resourceManagerService.NewListResourceGroupsOptions()
 	// Set Resource Group Name
 	resourceGroupOptions.SetName(resourceGroupName)
+	klog.Infof("resourceGroupName: %s", resourceGroupName)
 	// Set Account ID
 	resourceGroupOptions.SetAccountID(c.AccountID)
+	klog.Infof("account ID: %s", c.AccountID)
 	// Get Resource Group
+	klog.Infof("using resource manager URL: %s", c.resourceManagerService.GetServiceURL())
 	resourceGroup, _, err := c.resourceManagerService.ListResourceGroups(resourceGroupOptions)
 	if err != nil {
-		return "", err
+		return "", errors.Wrap(err, "failed to list resource groups")
 	}
 
 	// Check resourceGroup is not nil and Resources[] is not empty

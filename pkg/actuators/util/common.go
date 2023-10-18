@@ -20,16 +20,38 @@ import (
 	"context"
 	"fmt"
 
+	configv1 "github.com/openshift/api/config/v1"
 	machoneapierrors "github.com/openshift/machine-api-operator/pkg/controller/machine"
 	ibmcloudproviderv1 "github.com/openshift/machine-api-provider-ibmcloud/pkg/apis/ibmcloudprovider/v1"
 	apicorev1 "k8s.io/api/core/v1"
 	apimachineryerrors "k8s.io/apimachinery/pkg/api/errors"
+	apimachinerytypes "k8s.io/apimachinery/pkg/types"
 	controllerRuntimeClient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
 	credentialsSecretKey = "ibmcloud_api_key"
+
+	// IBMCloudServiceIAM is the lowercase name representation for IBM Cloud IAM
+	IBMCloudServiceIAM = "iam"
+
+	// IBMCloudServiceResourceManager is the lowercase name representation for IBM Cloud Resource Manager
+	IBMCloudServiceResourceManager = "resourcemanager"
+
+	// IBMCloudServiceVPC is the lowercase name representation for IBM Cloud VPC
+	IBMCloudServiceVPC = "vpc"
 )
+
+// GetInfrastructureConfig returns the cluster's Infrastructure config
+func GetInfrastructureConfig(coreClient controllerRuntimeClient.Client) (*configv1.Infrastructure, error) {
+	infraConfig := &configv1.Infrastructure{}
+
+	if err := coreClient.Get(context.Background(), apimachinerytypes.NamespacedName{Name: "cluster"}, infraConfig); err != nil {
+		return nil, fmt.Errorf("error getting infrastructure config: %v", err)
+	}
+
+	return infraConfig, nil
+}
 
 // GetCredentialsSecret returns base64 encoded credential secret data
 func GetCredentialsSecret(coreClient controllerRuntimeClient.Client, namespace string, spec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (string, error) {

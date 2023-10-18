@@ -88,7 +88,7 @@ func (r *Reconciler) getActualIbmClient(namespace string, providerSpec ibmcloudp
 		return nil, err
 	}
 
-	ibmClient, err := ibmclient.NewClient(apikey, providerSpec)
+	ibmClient, err := ibmclient.NewClient(r.Client, apikey, providerSpec)
 	if err != nil {
 		return nil, machineapierrors.InvalidMachineConfiguration("error creating ibm client: %v", err.Error())
 	}

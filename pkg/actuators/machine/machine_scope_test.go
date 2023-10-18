@@ -87,10 +87,10 @@ func TestNewMachineScope(t *testing.T) {
 
 	g.Expect(err).ToNot(HaveOccurred())
 
-	ibmClientBuilder := func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+	ibmClientBuilder := func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 		return mockIBMClient, nil
 	}
-	invalidIbmClientBuilder := func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+	invalidIbmClientBuilder := func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 		return nil, errors.New("ibmc test error")
 	}
 
@@ -383,7 +383,7 @@ func TestPatchMachine(t *testing.T) {
 			machineScope, err := newMachineScope(machineScopeParams{
 				client:  k8sClient,
 				machine: machine,
-				ibmClientBuilder: func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+				ibmClientBuilder: func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 					return nil, nil
 				},
 			})

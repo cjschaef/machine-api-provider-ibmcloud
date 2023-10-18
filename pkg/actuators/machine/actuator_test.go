@@ -295,11 +295,11 @@ func TestActuatorEvents(t *testing.T) {
 			}
 			gs.Eventually(getMachine, timeout).Should(Succeed())
 
-			ibmClientBuilder := func(secretVal string, providerSpec v1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+			ibmClientBuilder := func(coreClient client.Client, secretVal string, providerSpec v1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 				return mockIBMClient, nil
 			}
 			if tc.invalidMachineScope {
-				ibmClientBuilder = func(secretVal string, providerSpec v1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+				ibmClientBuilder = func(coreClient client.Client, secretVal string, providerSpec v1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 					return nil, errors.New("IBM Cloud client error")
 				}
 			}

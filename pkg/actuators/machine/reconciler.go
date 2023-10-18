@@ -83,6 +83,7 @@ func (r *Reconciler) create() error {
 	_, err = r.ibmClient.InstanceCreate(r.machine.Name, r.providerSpec, userData)
 
 	if err != nil {
+		klog.Errorf("%s: error using ibmClient: %v", r.machine.Name, r.ibmClient.GetServiceURL())
 		klog.Errorf("%s: error occured while creating machine: %w", r.machine.Name, err)
 		metrics.RegisterFailedInstanceCreate(&metrics.MachineLabels{
 			Name:      r.machine.Name,

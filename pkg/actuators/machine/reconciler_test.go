@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -124,7 +125,7 @@ func TestCreate(t *testing.T) {
 				client:  controllerfake.NewFakeClient(),
 				// providerSpec:   providerSpec,
 				// providerStatus: &ibmcloudproviderv1.IBMCloudMachineProviderStatus{},
-				ibmClientBuilder: func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+				ibmClientBuilder: func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 					return mockIBMClient, nil
 				},
 			})
@@ -234,7 +235,7 @@ func TestExists(t *testing.T) {
 			machineScope, err := newMachineScope(machineScopeParams{
 				machine: tc.machine(),
 				client:  controllerfake.NewFakeClient(),
-				ibmClientBuilder: func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+				ibmClientBuilder: func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 					return tc.ibmClient(mockCtrl), nil
 				},
 			})
@@ -405,7 +406,7 @@ func TestReconcileMachineWithCloudState(t *testing.T) {
 		client:  controllerfake.NewFakeClient(),
 		// providerSpec:   providerSpec,
 		// providerStatus: &ibmcloudproviderv1.IBMCloudMachineProviderStatus{},
-		ibmClientBuilder: func(secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
+		ibmClientBuilder: func(coreClient client.Client, secretVal string, providerSpec ibmcloudproviderv1.IBMCloudMachineProviderSpec) (ibmclient.Client, error) {
 			return mockIBMClient, nil
 		},
 	})
