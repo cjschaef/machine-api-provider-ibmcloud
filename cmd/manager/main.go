@@ -90,8 +90,10 @@ func main() {
 		"Address for hosting metrics",
 	)
 
-	klog.InitFlags(nil)
-	flag.Set("logtostderr", "true")
+	textLoggerConfig := textlogger.NewConfig()
+	textLoggerConfig.AddFlags(flag.CommandLine)
+	ctrl.SetLogger(textlogger.NewLogger(textLoggerConfig))
+	klog.LogToStderr(true)
 	flag.Parse()
 
 	if *printVersion {
@@ -150,7 +152,6 @@ func main() {
 		klog.Fatal(err)
 	}
 
-	ctrl.SetLogger(textlogger.NewLogger(nil))
 	setupLog := ctrl.Log.WithName("setup")
 	if err = (&machinesetcontroller.Reconciler{
 		Client: mgr.GetClient(),
