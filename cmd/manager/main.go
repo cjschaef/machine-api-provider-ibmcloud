@@ -90,11 +90,20 @@ func main() {
 		"Address for hosting metrics",
 	)
 
+	logToStderr := flag.Bool(
+		"logtostderr",
+		true,
+		"Log to Stderr instead of files",
+	)
+
 	textLoggerConfig := textlogger.NewConfig()
 	textLoggerConfig.AddFlags(flag.CommandLine)
 	ctrl.SetLogger(textlogger.NewLogger(textLoggerConfig))
-	klog.LogToStderr(true)
+
 	flag.Parse()
+	if logToStderr != nil {
+		klog.LogToStderr(*logToStderr)
+	}
 
 	if *printVersion {
 		fmt.Println(version.String)
