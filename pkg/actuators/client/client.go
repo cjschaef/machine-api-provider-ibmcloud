@@ -549,6 +549,27 @@ func (c *ibmCloudClient) GetSubnetIDbyName(subnetName string, resourceGroupID st
 			}
 		}
 	}
+
+	// Handle pagination of subnets
+	for subnetList.Next != nil {
+		if subnetList.Next.Href != nil {
+			nextListSubnetOptions := c.vpcService.NewListSubnetsOptions().SetStart(*subnetList.Next.Href)
+			subnetList, _, err = c.vpcService.ListSubnets(nextListSubnetOptions)
+			if err != nil {
+				return "", err
+			}
+			if subnetList != nil {
+				for _, eachSubnet := range subnetList.Subnets {
+					if *eachSubnet.Name == subnetName {
+						// Return Subnet ID
+						return *eachSubnet.ID, nil
+					}
+				}
+			}
+		} else {
+			return "", fmt.Errorf("next pagination reference is missing")
+		}
+	}
 	return "", fmt.Errorf("could not retrieve subnet id of name: %v", subnetName)
 }
 
