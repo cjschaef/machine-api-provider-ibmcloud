@@ -18,7 +18,9 @@ package client
 
 import (
 	"fmt"
+	"net/http"
 
+	"github.com/IBM-Cloud/bluemix-go/crn"
 	"github.com/IBM/go-sdk-core/v5/core"
 	"github.com/IBM/platform-services-go-sdk/resourcemanagerv2"
 	"github.com/IBM/vpc-go-sdk/vpcv1"
@@ -26,7 +28,7 @@ import (
 	configv1 "github.com/openshift/api/config/v1"
 	"github.com/openshift/machine-api-operator/pkg/controller/machine"
 	klog "k8s.io/klog/v2"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 
 	ibmcloudclienterrors "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/client/errors"
 	ibmcloudutil "github.com/openshift/machine-api-provider-ibmcloud/pkg/actuators/util"
@@ -327,10 +329,14 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 		networkResourceGroupID = resourceGroupID
 	}
 
-	// Get Custom Image ID
-	imageID, err := c.GetCustomImageByName(machineProviderConfig.Image, resourceGroupID)
+	// Determine if we were provided an Image Name, ID, or Catalog Offering CRN, to determine the Image used for the Machine.
+	// Build an ImageIdentity or a CatalogOfferingPrototype based on the Image information provided for the Machine.
+	imageIdentity, catalogOfferingPrototype, err := c.buildInstancePrototypeSource(machineProviderConfig.Image, resourceGroupID)
+	//imageID, err := c.GetCustomImageByName(machineProviderConfig.Image, resourceGroupID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failure determining image type: %w", err)
+	} else if imageIdentity == nil && catalogOfferingPrototype == nil {
+		return nil, fmt.Errorf("neither imageIdentity nor catalogOfferingPrototype was generated")
 	}
 
 	// Verify Instance Profile
@@ -362,9 +368,6 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 	// Set Instance Prototype - Contains all the info necessary to provision an instance
 	instancePrototypeObj := &vpcv1.InstancePrototype{
 		Name: &machineName,
-		Image: &vpcv1.ImageIdentity{
-			ID: &imageID,
-		},
 		Profile: &vpcv1.InstanceProfileIdentity{
 			Name: &instanceProfile,
 		},
@@ -386,6 +389,14 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 		UserData: &userData,
 	}
 
+	// Set either the Image or CatalogOffering based on the lookup performed for the supplied Image value (only one can be used as the Instance's image source).
+	// We verify that one of these is not nil above.
+	if catalogOfferingPrototype != nil {
+		instancePrototypeObj.CatalogOffering = catalogOfferingPrototype
+	} else {
+		instancePrototypeObj.Image = imageIdentity
+	}
+
 	// Configure machine's boot volume, if necessary.
 	if machineProviderConfig.BootVolume.EncryptionKey != "" {
 		instancePrototypeObj.BootVolumeAttachment = &vpcv1.VolumeAttachmentPrototypeInstanceByImageContext{
@@ -394,7 +405,7 @@ func (c *ibmCloudClient) InstanceCreate(machineName string, machineProviderConfi
 					CRN: &machineProviderConfig.BootVolume.EncryptionKey,
 				},
 				Profile: &vpcv1.VolumeProfileIdentity{
-					Name: pointer.String(ibmcloudutil.BootVolumeDefaultProfile),
+					Name: ptr.To(ibmcloudutil.BootVolumeDefaultProfile),
 				},
 			},
 		}
@@ -457,6 +468,68 @@ func (c *ibmCloudClient) GetAccountID() (string, error) {
 		return "", fmt.Errorf("could not retrieve account id")
 	}
 	return c.AccountID, nil
+}
+
+func (c *ibmCloudClient) buildInstancePrototypeSource(image string, resourceGroupID string) (*vpcv1.ImageIdentity, *vpcv1.InstanceCatalogOfferingPrototype, error) {
+	// We check the image value to be one of the following, determining whether we must create an ImageIdentity or InstanceCatalogOfferingPrototype as part of the InstancePrototype:
+	// 1. value is an IBM Cloud CRN of a:
+	//     a. IBM Cloud Catalog Offering
+	//     b. VPC Custom Image
+	// 2. value is the ID of a VPC Custom Image
+	// 3. value is the name of a VPC Custom Image
+
+	// Check if the value is an IBM Cloud CRN.
+	if crn, err := crn.Parse(image); err == nil {
+		// Take the CRN and determine if we have a Catalog Offering or a VPC Custom Image.
+		if crn.ServiceName == "globalcatalog-collection" {
+			// Depending if an offering CRN was provided or version, create the proper prototype.
+			switch crn.ResourceType {
+			case "offering":
+				return nil, &vpcv1.InstanceCatalogOfferingPrototype{
+					Offering: &vpcv1.CatalogOfferingIdentity{
+						CRN: ptr.To(image),
+					},
+				}, nil
+			case "version":
+				return nil, &vpcv1.InstanceCatalogOfferingPrototype{
+					Version: &vpcv1.CatalogOfferingVersionIdentity{
+						CRN: ptr.To(image),
+					},
+				}, nil
+			default:
+				return nil, nil, fmt.Errorf("unknown global-catalog resource type in crn: %s", image)
+			}
+		} else if crn.ServiceName == "is" && crn.ResourceType == "image" {
+			return &vpcv1.ImageIdentity{
+				CRN: ptr.To(image),
+			}, nil, nil
+		}
+		return nil, nil, fmt.Errorf("crn is not for a vpc custom image nor catalog offering")
+	}
+
+	var imageID *string
+	// Attempt to lookup the VPC Custom Image with value as an ID.
+	imageDetails, detailedResponse, err := c.vpcService.GetImage(c.vpcService.NewGetImageOptions(image))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed custom image lookup as id: %w", err)
+	} else if detailedResponse != nil && detailedResponse.GetStatusCode() == http.StatusNotFound {
+		// Attempt to lookup the VPC Custom Image with value as a name.
+		id, nameErr := c.GetCustomImageByName(image, resourceGroupID)
+		if nameErr != nil {
+			return nil, nil, fmt.Errorf("failed custom image lookup as name: %w", err)
+		}
+		imageID = ptr.To(id)
+	} else if imageDetails == nil {
+		return nil, nil, fmt.Errorf("image details missing for id: %s", image)
+	} else {
+		imageID = imageDetails.ID
+	}
+
+	// Build an ImageIdentity based on the ID or name lookup that was performed.
+
+	return &vpcv1.ImageIdentity{
+		ID: imageID,
+	}, nil, nil
 }
 
 // GetCustomImageByName retrieves custom image from VPC by region and name
